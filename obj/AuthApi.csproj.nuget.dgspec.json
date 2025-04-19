@@ -61,9 +61,13 @@
               "target": "Package",
               "version": "[9.0.4, )"
             },
+            "MongoDB.Bson": {
+              "target": "Package",
+              "version": "[2.28.0, )"
+            },
             "MongoDB.Driver": {
               "target": "Package",
-              "version": "[3.3.0, )"
+              "version": "[2.28.0, )"
             },
             "Swashbuckle.AspNetCore": {
               "target": "Package",
