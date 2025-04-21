@@ -14,125 +14,265 @@ namespace AuthApi.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize] // Requires authentication for all actions
     public class ProductsController : ControllerBase
     {
         private readonly ProductService _productService;
         private readonly UserManager<ApplicationUser> _userManager;
+        private readonly UserSessionService _userSessionService;
 
-        public ProductsController(ProductService productService, UserManager<ApplicationUser> userManager)
+        public ProductsController(
+            ProductService productService, 
+            UserManager<ApplicationUser> userManager,
+            UserSessionService userSessionService)
         {
             _productService = productService;
             _userManager = userManager;
+            _userSessionService = userSessionService;
         }
 
-        // GET: api/products - Accessible by all authenticated users
+        // GET: api/products - Accessible by both Admin and User roles
         [HttpGet]
+        [ProducesResponseType(typeof(IEnumerable<ProductDto>), StatusCodes.Status200OK)]
         public async Task<ActionResult<IEnumerable<ProductDto>>> GetAll()
         {
-            var products = await _productService.GetAllAsync();
-            return Ok(products.Select(p => new ProductDto
+            try
             {
-                Id = p.Id,
-                Name = p.Name,
-                Description = p.Description,
-                UserId = p.UserId.ToString()
-            }));
+                // Check if any user is logged in
+                if (!_userSessionService.AnyUserLoggedIn())
+                {
+                    return Unauthorized(new { message = "Please login first or token is not valid" });
+                }
+
+                var products = await _productService.GetAllAsync();
+                return Ok(products.Select(p => new ProductDto
+                {
+                    Id = p.Id,
+                    Name = p.Name,
+                    Description = p.Description,
+                    UserId = p.UserId.GetHashCode()
+                }));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in GetAll: {ex.Message}");
+                return StatusCode(500, "An error occurred while retrieving products");
+            }
         }
 
-        // GET: api/products/{id} - Accessible by all authenticated users
+        // GET: api/products/{id} - Accessible by any authenticated user
         [HttpGet("{id}")]
+        [ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
         public async Task<ActionResult<ProductDto>> GetById(string id)
         {
-            var product = await _productService.GetByIdAsync(id);
-
-            if (product == null)
+            try
             {
-                return NotFound();
-            }
+                // Check if any user is logged in
+                if (!_userSessionService.AnyUserLoggedIn())
+                {
+                    return Unauthorized(new { message = "Please login first or token is not valid" });
+                }
 
-            return new ProductDto
-            {
-                Id = product.Id,
-                Name = product.Name,
-                Description = product.Description,
-                UserId = product.UserId.ToString()
-            };
-        }
+                if (string.IsNullOrEmpty(id))
+                {
+                    return BadRequest("Invalid product ID");
+                }
 
-        // POST: api/products - Admin only
-        [HttpPost]
-        [Authorize(Roles = "Admin")]
-        public async Task<ActionResult<ProductDto>> Create(ProductCreateDto productDto)
-        {
-            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-            
-            var product = new Product
-            {
-                Name = productDto.Name,
-                Description = productDto.Description,
-                UserId = Guid.Parse(userId)
-            };
+                var product = await _productService.GetByIdAsync(id);
+                if (product == null)
+                {
+                    return NotFound($"Product with ID {id} not found");
+                }
 
-            await _productService.CreateAsync(product);
-
-            return CreatedAtAction(
-                nameof(GetById),
-                new { id = product.Id },
-                new ProductDto
+                return Ok(new ProductDto
                 {
                     Id = product.Id,
                     Name = product.Name,
                     Description = product.Description,
-                    UserId = product.UserId.ToString()
+                    UserId = product.UserId.GetHashCode()
                 });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in GetById: {ex.Message}");
+                return StatusCode(500, "An error occurred while retrieving the product");
+            }
+        }
+
+        // POST: api/products - Admin only
+        [HttpPost]
+        [ProducesResponseType(typeof(ProductDto), StatusCodes.Status201Created)]
+        public async Task<ActionResult<ProductDto>> Create(ProductCreateDto productDto)
+        {
+            try
+            {
+                // Check if any user is logged in
+                if (!_userSessionService.AnyUserLoggedIn())
+                {
+                    return Unauthorized(new { message = "Please login first or token is not valid" });
+                }
+                
+                // Get the current user and verify if admin role
+                var activeUser = _userSessionService.GetCurrentUser();
+                if (activeUser == null)
+                {
+                    return Unauthorized(new { message = "Unable to identify current user" });
+                }
+                
+                // Check if user has admin role
+                var user = await _userManager.FindByIdAsync(activeUser);
+                if (user == null)
+                {
+                    return Unauthorized(new { message = "User not found" });
+                }
+                
+                // Check if user has admin role
+                var roles = await _userManager.GetRolesAsync(user);
+                if (!roles.Contains("Admin"))
+                {
+                    return Forbid();
+                }
+
+                var product = new Product
+                {
+                    Name = productDto.Name,
+                    Description = productDto.Description,
+                    UserId = Guid.Parse(activeUser)
+                };
+
+                await _productService.CreateAsync(product);
+
+                return CreatedAtAction(
+                    nameof(GetById),
+                    new { id = product.Id },
+                    new ProductDto
+                    {
+                        Id = product.Id,
+                        Name = product.Name,
+                        Description = product.Description,
+                        UserId = product.UserId.GetHashCode()
+                    });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in Create: {ex.Message}");
+                return StatusCode(500, "An error occurred while creating the product");
+            }
         }
 
         // PUT: api/products/{id} - Admin only
         [HttpPut("{id}")]
-        [Authorize(Roles = "Admin")]
-        public async Task<ActionResult> Update(string id, ProductUpdateDto productDto)
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        public async Task<IActionResult> Update(string id, ProductUpdateDto productDto)
         {
-            var existingProduct = await _productService.GetByIdAsync(id);
-
-            if (existingProduct == null)
+            try
             {
-                return NotFound();
+                // Check if any user is logged in
+                if (!_userSessionService.AnyUserLoggedIn())
+                {
+                    return Unauthorized(new { message = "Please login first or token is not valid" });
+                }
+                
+                // Get the current user and verify if admin role
+                var activeUser = _userSessionService.GetCurrentUser();
+                if (activeUser == null)
+                {
+                    return Unauthorized(new { message = "Unable to identify current user" });
+                }
+                
+                // Check if user has admin role
+                var user = await _userManager.FindByIdAsync(activeUser);
+                if (user == null)
+                {
+                    return Unauthorized(new { message = "User not found" });
+                }
+                
+                // Check if user has admin role
+                var roles = await _userManager.GetRolesAsync(user);
+                if (!roles.Contains("Admin"))
+                {
+                    return Forbid();
+                }
+
+                if (string.IsNullOrEmpty(id))
+                {
+                    return BadRequest("Invalid product ID");
+                }
+
+                var product = await _productService.GetByIdAsync(id);
+                if (product == null)
+                {
+                    return NotFound($"Product with ID {id} not found");
+                }
+
+                // Update product properties
+                product.Name = productDto.Name;
+                product.Description = productDto.Description;
+
+                await _productService.UpdateAsync(id, product);
+
+                return NoContent();
             }
-
-            existingProduct.Name = productDto.Name;
-            existingProduct.Description = productDto.Description;
-
-            var success = await _productService.UpdateAsync(id, existingProduct);
-
-            if (!success)
+            catch (Exception ex)
             {
-                return BadRequest("Error updating product");
+                Console.WriteLine($"Error in Update: {ex.Message}");
+                return StatusCode(500, "An error occurred while updating the product");
             }
-
-            return NoContent();
         }
 
         // DELETE: api/products/{id} - Admin only
         [HttpDelete("{id}")]
-        [Authorize(Roles = "Admin")]
-        public async Task<ActionResult> Delete(string id)
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        public async Task<IActionResult> Delete(string id)
         {
-            var product = await _productService.GetByIdAsync(id);
-
-            if (product == null)
+            try
             {
-                return NotFound();
+                // Check if any user is logged in
+                if (!_userSessionService.AnyUserLoggedIn())
+                {
+                    return Unauthorized(new { message = "Please login first or token is not valid" });
+                }
+                
+                // Get the current user and verify if admin role
+                var activeUser = _userSessionService.GetCurrentUser();
+                if (activeUser == null)
+                {
+                    return Unauthorized(new { message = "Unable to identify current user" });
+                }
+                
+                // Check if user has admin role
+                var user = await _userManager.FindByIdAsync(activeUser);
+                if (user == null)
+                {
+                    return Unauthorized(new { message = "User not found" });
+                }
+                
+                // Check if user has admin role
+                var roles = await _userManager.GetRolesAsync(user);
+                if (!roles.Contains("Admin"))
+                {
+                    return Forbid();
+                }
+
+                if (string.IsNullOrEmpty(id))
+                {
+                    return BadRequest("Invalid product ID");
+                }
+
+                var product = await _productService.GetByIdAsync(id);
+                if (product == null)
+                {
+                    return NotFound($"Product with ID {id} not found");
+                }
+
+                await _productService.DeleteAsync(id);
+
+                return NoContent();
             }
-
-            var success = await _productService.DeleteAsync(id);
-
-            if (!success)
+            catch (Exception ex)
             {
-                return BadRequest("Error deleting product");
+                Console.WriteLine($"Error in Delete: {ex.Message}");
+                return StatusCode(500, "An error occurred while deleting the product");
             }
-
-            return NoContent();
         }
     }
 }

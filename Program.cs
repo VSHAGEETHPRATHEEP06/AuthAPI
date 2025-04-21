@@ -20,30 +20,14 @@ builder.Services.AddEndpointsApiExplorer();
 // Add OpenAPI/Swagger
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "AuthAPI", Version = "v1" });
-
-    // Add JWT Authentication to Swagger
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
-
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
+    c.SwaggerDoc("v1", new OpenApiInfo { 
+        Title = "Auth API", 
+        Version = "v1",
+        Description = "A secure authentication API with JWT token support",
+        Contact = new OpenApiContact
         {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            Array.Empty<string>()
+            Name = "API Support",
+            Email = "support@authapi.com"
         }
     });
 });
@@ -94,21 +78,30 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.SaveToken = true;
+    options.SaveToken = false;
     options.RequireHttpsMetadata = false;
+    
+    // Disable HTTPS validation for development
+    options.BackchannelHttpHandler = new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+    };
+    
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
         ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidIssuer = builder.Configuration["JwtSettings:Issuer"],
-        ValidAudience = builder.Configuration["JwtSettings:Audience"],
+        ValidIssuer = builder.Configuration["JwtSettings:Issuer"] ?? "AuthApi",
+        ValidAudience = builder.Configuration["JwtSettings:Audience"] ?? "AuthApiClient",
         IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:SecretKey"])),
+            Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:SecretKey"] ?? "ThisIsTheVerySecureKeyThatShouldBeStoredInASecureVault")),
         NameClaimType = ClaimTypes.Name,
-        ClockSkew = TimeSpan.Zero
+        RoleClaimType = ClaimTypes.Role,
+        ClockSkew = TimeSpan.FromMinutes(5)
     };
+    
     options.Events = new JwtBearerEvents
     {
         OnAuthenticationFailed = context =>
@@ -119,11 +112,19 @@ builder.Services.AddAuthentication(options =>
         OnTokenValidated = context =>
         {
             Console.WriteLine("Token successfully validated");
-            return Task.CompletedTask;
-        },
-        OnChallenge = context =>
-        {
-            Console.WriteLine($"OnChallenge: {context.Error}, {context.ErrorDescription}");
+            
+            // Check if the token exists in UserSessionService
+            var userId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!string.IsNullOrEmpty(userId))
+            {
+                var userSessionService = context.HttpContext.RequestServices.GetRequiredService<UserSessionService>();
+                if (!userSessionService.IsUserLoggedIn(userId))
+                {
+                    // Token is no longer valid, user has logged out or another user is logged in
+                    context.Fail("Token is no longer valid (user logged out or session expired)");
+                }
+            }
+            
             return Task.CompletedTask;
         }
     };
@@ -132,6 +133,7 @@ builder.Services.AddAuthentication(options =>
 // Register custom services
 builder.Services.AddScoped<TokenService>();
 builder.Services.AddScoped<ProductService>();
+builder.Services.AddSingleton<UserSessionService>();
 
 // 2. Build the app
 var app = builder.Build();
@@ -172,8 +174,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-
-app.UseHttpsRedirection();
+else
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();

@@ -2,6 +2,8 @@ using AuthApi.Models;
 using AuthApi.Settings;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
+using MongoDbGenericRepository.Attributes;
+using System.Reflection;
 
 namespace AuthApi.Services
 {
@@ -13,7 +15,8 @@ namespace AuthApi.Services
         {
             var client = new MongoClient(mongoDbSettings.Value.ConnectionString);
             var database = client.GetDatabase(mongoDbSettings.Value.DatabaseName);
-            _products = database.GetCollection<Product>("Products");
+            var collectionName = typeof(Product).GetCustomAttribute<CollectionNameAttribute>()?.Name ?? "Products";
+            _products = database.GetCollection<Product>(collectionName);
         }
 
         public async Task<List<Product>> GetAllAsync()

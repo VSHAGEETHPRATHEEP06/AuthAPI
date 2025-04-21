@@ -1,9 +1,11 @@
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
+using MongoDbGenericRepository.Attributes;
 using System;
 
 namespace AuthApi.Models
 {
+    [CollectionName("Products")]
     public class Product
     {
         [BsonId]
